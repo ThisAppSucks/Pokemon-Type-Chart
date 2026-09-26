@@ -351,6 +351,13 @@
     cursor:pointer;
   }
   .slot .remove-x:hover{color:var(--notvery); border-color:var(--notvery);}
+  .avail-tag{
+    font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.03em;
+    padding:2px 7px; border-radius:10px; margin-top:2px;
+  }
+  .avail-tag.avail-now{background:rgba(79,214,122,.18); color:var(--super); border:1px solid rgba(79,214,122,.4);}
+  .avail-tag.avail-later{background:rgba(224,90,90,.15); color:#f0a3a3; border:1px solid rgba(224,90,90,.4);}
+  .avail-tag.avail-unknown{background:var(--panel-2); color:var(--dim); border:1px solid var(--line);}
 
   .team-summary{
     font-family:var(--mono);
@@ -507,6 +514,15 @@
         <button id="teamAddBtn">Add</button>
       </div>
       <div id="teamMsg" class="search-msg"></div>
+    </div>
+
+    <div class="search-panel" id="progressPanel">
+      <p class="selector-label">Game progress (optional) — marks pokémon available / not yet, doesn't block anything</p>
+      <div class="search-row">
+        <select id="progressGameSelect"></select>
+        <select id="progressBadgeSelect"></select>
+      </div>
+      <p class="search-hint">uses each pokémon's lowest wild-encounter level in that game as a rough progress marker (no data source tracks exact route/gym gating) — borderline cases lean "available" since skips and sequence breaks are assumed possible</p>
     </div>
 
     <div class="team-slots" id="teamSlots"></div>
@@ -1079,6 +1095,44 @@ const teamSlots = document.getElementById('teamSlots');
 let team = [];
 let lastProblems = {overloaded:[], blindSpots:[]};
 
+// ---- game progress (optional availability marker) ----
+let progressGame = '';
+let progressBadges = 0;
+const BADGE_LEVEL_CEILING = [14,20,25,29,33,38,43,50,60]; // rough universal curve, index = badge count 0-8
+const AVAIL_SLACK = 4; // extra levels of leeway so borderline cases lean "available" (skips/sequence breaks assumed possible)
+
+const progressGameSelect = document.getElementById('progressGameSelect');
+const progressBadgeSelect = document.getElementById('progressBadgeSelect');
+progressGameSelect.innerHTML = '<option value="">— no game selected —</option>' +
+  GAME_ORDER.map(v=>'<option value="'+v+'">'+titleCaseGame(v)+'</option>').join('');
+progressBadgeSelect.innerHTML = [0,1,2,3,4,5,6,7,8].map(n=>'<option value="'+n+'">'+n+' badge'+(n===1?'':'s')+'</option>').join('');
+progressGameSelect.onchange = function(){ progressGame = progressGameSelect.value; renderTeam(); };
+progressBadgeSelect.onchange = function(){ progressBadges = parseInt(progressBadgeSelect.value); renderTeam(); };
+
+// returns {status:'available'|'later'|'unknown', minLevel, neededBadges}
+async function getAvailability(pokemonId, game){
+  if(!game) return null;
+  const enc = await fetchEncounters(pokemonId);
+  const grouped = groupEncountersByVersion(enc);
+  const areas = grouped[game];
+  if(!areas || !areas.length) return { status:'unknown', minLevel:null, neededBadges:null };
+  const minLevel = Math.min.apply(null, areas.map(a=>a.minLevel));
+  const ceiling = BADGE_LEVEL_CEILING[Math.min(progressBadges,8)] + AVAIL_SLACK;
+  if(minLevel<=ceiling){
+    return { status:'available', minLevel, neededBadges:null };
+  }
+  let needed = BADGE_LEVEL_CEILING.findIndex(c=> (c+AVAIL_SLACK) >= minLevel);
+  if(needed===-1) needed = 8;
+  return { status:'later', minLevel, neededBadges: needed };
+}
+
+function availTagHtml(avail){
+  if(!avail) return '';
+  if(avail.status==='available') return '<span class="avail-tag avail-now">Lv.'+avail.minLevel+' · available now</span>';
+  if(avail.status==='later') return '<span class="avail-tag avail-later">Lv.'+avail.minLevel+' · ~badge '+avail.neededBadges+'+</span>';
+  return '<span class="avail-tag avail-unknown">not confirmed here</span>';
+}
+
 async function addToTeam(rawVal){
   const raw = (rawVal !== undefined ? rawVal : teamInput.value).trim().toLowerCase().replace(/\s+/g,'-');
   if(!raw){ return; }
@@ -1118,15 +1172,25 @@ function renderTeam(){
       slotsHtml.push('<div class="slot empty">+ empty slot</div>');
     } else {
       slotsHtml.push(
-        '<div class="slot">'+
+        '<div class="slot" data-member-id="'+m.id+'">'+
           '<button class="remove-x" onclick="removeFromTeam('+m.id+')">✕</button>'+
           '<img src="'+m.sprite+'" alt="">'+
           '<div class="slot-name">'+m.name.replace(/-/g,' ')+'</div>'+
           '<div class="slot-types">'+m.types.map(t=>'<span class="type-pill" style="background:'+COLORS[t]+'">'+t+'</span>').join('')+'</div>'+
+          '<div class="avail-slot"></div>'+
         '</div>');
     }
   }
   teamSlots.innerHTML = slotsHtml.join('');
+
+  if(progressGame){
+    team.forEach(function(m){
+      getAvailability(m.id, progressGame).then(function(avail){
+        const slotEl = teamSlots.querySelector('.slot[data-member-id="'+m.id+'"] .avail-slot');
+        if(slotEl) slotEl.innerHTML = availTagHtml(avail);
+      });
+    });
+  }
 
   const summaryEl = document.getElementById('teamSummary');
   const pairWarnEl = document.getElementById('teamPairWarnings');
@@ -1220,6 +1284,24 @@ function renderTeam(){
   offenseEl.innerHTML = TYPES.map(t=>offenseCell(t)).join('');
 }
 
+function shuffleArr(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+
+async function fetchSpeciesFlags(speciesUrl){
+  try{
+    const res = await fetch(speciesUrl);
+    if(!res.ok) return {legendary:false, mythical:false};
+    const d = await res.json();
+    return {legendary: !!d.is_legendary, mythical: !!d.is_mythical};
+  }catch(e){ return {legendary:false, mythical:false}; }
+}
+
 // ---- suggested additions: pokémon that resist/block the team's problem types ----
 function scoreDefTypes(problemTypes){
   return TYPES.map(defType=>{
@@ -1246,47 +1328,81 @@ async function suggestFixes(){
   try{
     const ranked = scoreDefTypes(problemTypes).slice(0,4);
     const teamIds = new Set(team.map(m=>m.id));
-    const suggestions = [];
 
-    for(const r of ranked){
-      if(suggestions.length>=8) break;
-      let listData;
+    // fetch every candidate type's full member list IN PARALLEL (was one type at a time before),
+    // then take a random sample of 12 per type instead of always the same low-dex-number entries.
+    const typeLists = await Promise.all(ranked.map(async r=>{
       try{
         const res = await fetch('https://pokeapi.co/api/v2/type/'+r.type.toLowerCase());
-        if(!res.ok) continue;
-        listData = await res.json();
-      }catch(e){ continue; }
+        if(!res.ok) return { type:r.type, covers:r.covers, names:[] };
+        const data = await res.json();
+        const names = data.pokemon
+          .map(p=>p.pokemon)
+          .filter(p=>!p.name.includes('-'))
+          .map(p=>{
+            const m = p.url.match(/\/pokemon\/(\d+)\//);
+            return { name:p.name, id: m ? parseInt(m[1]) : null };
+          })
+          .filter(p=>p.id && !teamIds.has(p.id));
+        return { type:r.type, covers:r.covers, names: shuffleArr(names).slice(0,12) };
+      }catch(e){ return { type:r.type, covers:r.covers, names:[] }; }
+    }));
 
-      const candidates = listData.pokemon.map(p=>p.pokemon).filter(p=>!p.name.includes('-'));
-      let picked = 0;
-      for(const c of candidates){
-        if(picked>=3 || suggestions.length>=8) break;
-        const idMatch = c.url.match(/\/pokemon\/(\d+)\//);
-        const id = idMatch ? parseInt(idMatch[1]) : null;
-        if(id && teamIds.has(id)) continue;
-        if(suggestions.some(s=>s.id===id)) continue;
+    const seen = new Set();
+    const suggestions = [];
+
+    for(const tl of typeLists){
+      if(suggestions.length>=8) break;
+      const candidates = tl.names.filter(c=>!seen.has(c.id));
+      // evaluate this type's sampled candidates IN PARALLEL (was one fetchPokemon call at a time before),
+      // and drop legendaries/mythicals since they're rarely a practical "add this to your team" suggestion.
+      const evaluated = await Promise.all(candidates.map(async c=>{
         try{
-          const full = await fetchPokemon(c.name);
-          if(teamIds.has(full.id) || suggestions.some(s=>s.id===full.id)) continue;
-          suggestions.push(Object.assign({}, full, {coversFor: r.covers}));
-          picked++;
-        }catch(e){ /* skip candidates that fail to fetch */ }
+          const p = await fetchPokemon(c.name);
+          const flags = await fetchSpeciesFlags(p.speciesUrl);
+          if(flags.legendary || flags.mythical) return null;
+          return p;
+        }catch(e){ return null; }
+      }));
+      let picked = 0;
+      for(const p of evaluated){
+        if(!p || picked>=3 || suggestions.length>=8) continue;
+        if(seen.has(p.id)) continue;
+        seen.add(p.id);
+        suggestions.push(Object.assign({}, p, {coversFor: tl.covers}));
+        picked++;
       }
     }
 
     if(!suggestions.length){
-      out.innerHTML = '<p class="empty">couldn\'t find good candidates right now — try again</p>';
-    } else {
-      out.innerHTML = '<div class="team-slots">' + suggestions.map(s=>
-        '<div class="slot" style="min-height:auto; padding:10px;">'+
+      out.innerHTML = '<p class="empty">couldn\'t find good non-legendary candidates right now — click "suggest fixes" again for a fresh random sample, or the gap may need a specific counter rather than a type match</p>';
+      return;
+    }
+
+    // if a progress game is set, check availability for each suggestion and sort available-now first
+    let withAvail = suggestions.map(s=>({ s, avail:null }));
+    if(progressGame){
+      withAvail = await Promise.all(suggestions.map(async s=>{
+        const avail = await getAvailability(s.id, progressGame);
+        return { s, avail };
+      }));
+      withAvail.sort((a,b)=>{
+        const rank = x => x.avail && x.avail.status==='available' ? 0 : (x.avail && x.avail.status==='later' ? 2 : 1);
+        return rank(a)-rank(b);
+      });
+    }
+
+    out.innerHTML = '<div class="team-slots">' + withAvail.map(function(entry){
+      const s = entry.s, avail = entry.avail;
+      return '<div class="slot" style="min-height:auto; padding:10px;">'+
           '<img src="'+s.sprite+'" alt="" style="width:48px;height:48px;">'+
           '<div class="slot-name">'+s.name.replace(/-/g,' ')+'</div>'+
           '<div class="slot-types">'+s.types.map(t=>'<span class="type-pill" style="background:'+COLORS[t]+'">'+t+'</span>').join('')+'</div>'+
           '<div style="font-family:var(--mono); font-size:9.5px; color:var(--dim); margin-top:2px;">covers: '+s.coversFor.join(', ')+'</div>'+
+          (avail ? availTagHtml(avail) : '')+
           '<button class="tab-btn" style="border:1px solid var(--line); border-radius:5px; margin-top:6px; padding:4px 10px; font-size:10.5px;" onclick="quickAddSuggestion(\''+s.name+'\')">+ add to team</button>'+
-        '</div>'
-      ).join('') + '</div>';
-    }
+        '</div>';
+    }).join('') + '</div>';
   } finally {
     btn.disabled = false;
     btn.textContent = 'Suggest fixes';
