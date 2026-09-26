@@ -857,6 +857,95 @@ async function loadEvolutionSection(speciesUrl, currentId){
   }
 }
 
+// ===================== GAME ENCOUNTERS =====================
+const GAME_ORDER = [
+  'red','blue','yellow',
+  'gold','silver','crystal',
+  'ruby','sapphire','emerald','firered','leafgreen',
+  'diamond','pearl','platinum','heartgold','soulsilver',
+  'black','white','black-2','white-2',
+  'x','y','omega-ruby','alpha-sapphire',
+  'sun','moon','ultra-sun','ultra-moon','lets-go-pikachu','lets-go-eevee',
+  'sword','shield','brilliant-diamond','shining-pearl','legends-arceus',
+  'scarlet','violet'
+];
+
+function titleCaseGame(v){ return v.split('-').map(titleCase).join(' '); }
+function methodLabel(m){ return m.split('-').map(titleCase).join(' '); }
+
+async function fetchEncounters(id){
+  try{
+    const res = await fetch('https://pokeapi.co/api/v2/pokemon/'+id+'/encounters');
+    if(!res.ok) return [];
+    return await res.json();
+  }catch(e){ return []; }
+}
+
+// groups the raw encounter payload into { versionName: [ {area, minLevel, maxLevel, methods[]} ], sorted by level }
+function groupEncountersByVersion(encounterData){
+  const map = {};
+  encounterData.forEach(entry=>{
+    const areaName = entry.location_area.name;
+    entry.version_details.forEach(vd=>{
+      const version = vd.version.name;
+      if(!map[version]) map[version] = [];
+      let minL = Infinity, maxL = -Infinity;
+      const methods = new Set();
+      vd.encounter_details.forEach(ed=>{
+        minL = Math.min(minL, ed.min_level);
+        maxL = Math.max(maxL, ed.max_level);
+        methods.add(ed.method.name);
+      });
+      map[version].push({ area: areaName, minLevel: minL, maxLevel: maxL, methods: Array.from(methods) });
+    });
+  });
+  Object.keys(map).forEach(v=> map[v].sort((a,b)=>a.minLevel-b.minLevel));
+  return map;
+}
+
+function renderEncounterList(areas, version){
+  const listEl = document.getElementById('gameEncounterList');
+  if(!areas || !areas.length){
+    listEl.innerHTML = '<p class="empty">no wild encounter data for '+titleCaseGame(version)+' — this Pokémon may only be obtainable here via evolution, trade, gift, egg, or event</p>';
+    return;
+  }
+  listEl.innerHTML = areas.map(a=>
+    '<div class="encounter-row">'+
+      '<div class="encounter-area">'+a.area.replace(/-/g,' ')+'</div>'+
+      '<div class="encounter-level">Lv. '+a.minLevel+(a.maxLevel!==a.minLevel ? '–'+a.maxLevel : '')+'</div>'+
+      '<div class="encounter-method">'+a.methods.map(methodLabel).join(', ')+'</div>'+
+    '</div>'
+  ).join('') +
+  '<p class="search-hint" style="margin-top:10px;">note: PokéAPI does not track weather or time-of-day conditions for encounters, so those can\'t be shown — only location, level range, and method, sorted low-to-high level.</p>';
+}
+
+function renderGamesSection(encMap){
+  const el = document.getElementById('dexGames');
+  const anyData = GAME_ORDER.some(v=>encMap[v] && encMap[v].length);
+  let html = '<p class="colhead">Where to catch — by game</p>';
+  if(!anyData){
+    html += '<p class="empty">no wild encounter data found in any game — likely a starter, fossil, legendary, gift, or evolution-only Pokémon</p>';
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="game-chips" id="gameChips">';
+  GAME_ORDER.forEach(v=>{
+    const has = encMap[v] && encMap[v].length;
+    html += '<button class="game-chip" data-version="'+v+'" '+(has?'':'disabled style="opacity:.35;cursor:not-allowed;"')+'>'+titleCaseGame(v)+'</button>';
+  });
+  html += '</div><div id="gameEncounterList" style="margin-top:14px;"><p class="empty">click a game above to see catch locations, sorted by level</p></div>';
+  el.innerHTML = html;
+
+  document.querySelectorAll('#gameChips .game-chip').forEach(chip=>{
+    if(chip.disabled) return;
+    chip.onclick = ()=>{
+      document.querySelectorAll('#gameChips .game-chip').forEach(c=>c.classList.remove('active'));
+      chip.classList.add('active');
+      renderEncounterList(encMap[chip.dataset.version], chip.dataset.version);
+    };
+  });
+}
+
 function wireAutocomplete(input, box, onPick){
   let hiIndex = -1;
   let matches = [];
@@ -968,6 +1057,11 @@ async function lookupPokemon(rawVal){
     }
     dexCard.classList.add('show');
     loadEvolutionSection(p.speciesUrl, p.id);
+
+    document.getElementById('dexGames').innerHTML = '<p class="colhead">Where to catch — by game</p><p class="search-msg loading">loading encounter data…</p>';
+    fetchEncounters(p.id).then(encData=>{
+      renderGamesSection(groupEncountersByVersion(encData));
+    });
   } catch(err){
     searchMsg.innerHTML = '<p class="search-msg err">no match for "'+raw+'" — check the spelling, or use the dex number instead</p>';
   }
