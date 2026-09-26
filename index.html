@@ -522,7 +522,8 @@
         <select id="progressGameSelect"></select>
         <select id="progressBadgeSelect"></select>
       </div>
-      <p class="search-hint">uses each pokémon's lowest wild-encounter level in that game as a rough progress marker (no data source tracks exact route/gym gating) — borderline cases lean "available" since skips and sequence breaks are assumed possible</p>
+      <p class="search-hint">uses each pokémon's lowest wild-encounter level in that game as a progress marker — exact where the game itself gates by level (Sword/Shield), an estimated curve with slack elsewhere, since skips and sequence breaks are assumed possible when data isn't exact</p>
+      <p class="search-hint" id="progressAccuracyNote" style="color:var(--dim); font-style:italic;"></p>
     </div>
 
     <div class="team-slots" id="teamSlots"></div>
@@ -1098,15 +1099,36 @@ let lastProblems = {overloaded:[], blindSpots:[]};
 // ---- game progress (optional availability marker) ----
 let progressGame = '';
 let progressBadges = 0;
-const BADGE_LEVEL_CEILING = [14,20,25,29,33,38,43,50,60]; // rough universal curve, index = badge count 0-8
-const AVAIL_SLACK = 4; // extra levels of leeway so borderline cases lean "available" (skips/sequence breaks assumed possible)
+const BADGE_LEVEL_CEILING = [14,20,25,29,33,38,43,50,60]; // rough universal curve, index = badge count 0-8 — used as a fallback where no exact data exists
+const AVAIL_SLACK = 4; // extra levels of leeway for the fallback curve so borderline cases lean "available" (skips/sequence breaks assumed possible)
+
+// exact, reverse-engineered catch-level caps (Dragonflycave, from decompiled game code) — not an approximation.
+// This mechanic is purely badge-count-gated (any Pokémon above this level can't even be thrown a ball at),
+// so there's no route/branching ambiguity here at all for Sword/Shield specifically.
+const EXACT_LEVEL_CAPS = {
+  sword:  [20,25,30,35,40,45,50,55,100],
+  shield: [20,25,30,35,40,45,50,55,100]
+};
 
 const progressGameSelect = document.getElementById('progressGameSelect');
 const progressBadgeSelect = document.getElementById('progressBadgeSelect');
+const progressAccuracyNote = document.getElementById('progressAccuracyNote');
 progressGameSelect.innerHTML = '<option value="">— no game selected —</option>' +
   GAME_ORDER.map(v=>'<option value="'+v+'">'+titleCaseGame(v)+'</option>').join('');
 progressBadgeSelect.innerHTML = [0,1,2,3,4,5,6,7,8].map(n=>'<option value="'+n+'">'+n+' badge'+(n===1?'':'s')+'</option>').join('');
-progressGameSelect.onchange = function(){ progressGame = progressGameSelect.value; renderTeam(); };
+
+function updateProgressAccuracyNote(){
+  if(!progressAccuracyNote) return;
+  if(!progressGame){
+    progressAccuracyNote.textContent = '';
+  } else if(EXACT_LEVEL_CAPS[progressGame]){
+    progressAccuracyNote.textContent = titleCaseGame(progressGame)+' uses an exact, decompiled catch-level cap per badge — this one isn\'t an approximation.';
+  } else {
+    progressAccuracyNote.textContent = 'No exact gating data exists for '+titleCaseGame(progressGame)+' — this uses an estimated level curve with slack built in.';
+  }
+}
+
+progressGameSelect.onchange = function(){ progressGame = progressGameSelect.value; updateProgressAccuracyNote(); renderTeam(); };
 progressBadgeSelect.onchange = function(){ progressBadges = parseInt(progressBadgeSelect.value); renderTeam(); };
 
 // returns {status:'available'|'later'|'unknown', minLevel, neededBadges}
@@ -1117,6 +1139,16 @@ async function getAvailability(pokemonId, game){
   const areas = grouped[game];
   if(!areas || !areas.length) return { status:'unknown', minLevel:null, neededBadges:null };
   const minLevel = Math.min.apply(null, areas.map(a=>a.minLevel));
+
+  const exactCaps = EXACT_LEVEL_CAPS[game];
+  if(exactCaps){
+    const ceiling = exactCaps[Math.min(progressBadges,8)];
+    if(minLevel<=ceiling) return { status:'available', minLevel, neededBadges:null };
+    let needed = exactCaps.findIndex(c=> c >= minLevel);
+    if(needed===-1) needed = 8;
+    return { status:'later', minLevel, neededBadges: needed };
+  }
+
   const ceiling = BADGE_LEVEL_CEILING[Math.min(progressBadges,8)] + AVAIL_SLACK;
   if(minLevel<=ceiling){
     return { status:'available', minLevel, neededBadges:null };
