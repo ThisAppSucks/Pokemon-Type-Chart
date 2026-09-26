@@ -778,7 +778,8 @@ function wireAutocomplete(input, box, onPick){
       if(e.key==='Escape'){ close(); return; }
       if(e.key==='Enter'){
         e.preventDefault();
-        if(hiIndex>-1){ input.value = matches[hiIndex].name; }
+        const pick = hiIndex>-1 ? hiIndex : 0; // default to the top suggestion if none highlighted
+        input.value = matches[pick].name;
         close();
         onPick(input.value);
         return;
