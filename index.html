@@ -464,7 +464,6 @@
         <div class="panel" id="dexMatchups" style="margin-top:16px; margin-bottom:0;"></div>
         <div class="panel" id="dexEvolution" style="margin-top:16px; margin-bottom:0;"></div>
         <div class="panel" id="dexGames" style="margin-top:16px; margin-bottom:0;"></div>
-        <div class="panel" id="dexCobblemon" style="margin-top:16px; margin-bottom:0;"></div>
       </div>
     </div>
     <p class="search-hint" style="margin-bottom:0;">tip: this typing is also loaded into the Type Matchups tab if you want to build on it manually</p>
@@ -947,102 +946,6 @@ function renderGamesSection(encMap){
   });
 }
 
-// ===================== COBBLEMON (Minecraft mod) SPAWN DATA =====================
-// Pulls straight from Cobblemon's own open-source spawn_pool_world JSON files on GitLab.
-// This reflects the mod's *default* spawn pool only — individual servers can (and often do)
-// override it with their own datapacks, so treat this as "vanilla Cobblemon", not gospel for any given server.
-function speciesRefFromUrl(url){
-  if(!url) return null;
-  const m = url.match(/\/(\d+)\/?$/);
-  const parts = url.split('/').filter(Boolean);
-  return { id: m ? parseInt(m[1]) : null, name: parts[parts.length-1] };
-}
-
-async function fetchCobblemonSpawn(id, name){
-  const padded = String(id).padStart(4,'0');
-  const fileName = name.replace(/-/g,'_');
-  const url = 'https://gitlab.com/cable-mc/cobblemon/-/raw/main/common/src/main/resources/data/cobblemon/spawn_pool_world/'+padded+'_'+fileName+'.json';
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('no cobblemon spawn file for '+fileName);
-  return await res.json();
-}
-
-function levelRangeLabel(lvl){
-  if(lvl===undefined || lvl===null) return '?';
-  if(typeof lvl === 'string' || typeof lvl === 'number') return String(lvl);
-  if(typeof lvl === 'object'){
-    if(lvl.min!==undefined) return lvl.min + (lvl.max!==undefined && lvl.max!==lvl.min ? '–'+lvl.max : '');
-    return JSON.stringify(lvl);
-  }
-  return String(lvl);
-}
-
-function cleanTag(v){
-  return String(v).replace(/^#?(cobblemon|minecraft):/,'').replace(/_/g,' ');
-}
-
-// generic renderer for whatever shape a condition/anticondition object turns out to have —
-// Cobblemon's schema has drifted across versions, so this just surfaces key:value pairs rather
-// than assuming exact field names.
-function condSummary(cond){
-  if(!cond || typeof cond !== 'object') return '';
-  const parts = [];
-  Object.keys(cond).forEach(k=>{
-    let v = cond[k];
-    if(Array.isArray(v)) v = v.map(cleanTag).join(', ');
-    else if(typeof v === 'object' && v!==null) v = JSON.stringify(v);
-    else v = cleanTag(v);
-    parts.push(k.replace(/([A-Z])/g,' $1').toLowerCase()+': '+v);
-  });
-  return parts.join(' · ');
-}
-
-function renderCobblemonSpawns(data, displayName){
-  const el = document.getElementById('cobblemonSpawnList');
-  const spawns = data && Array.isArray(data.spawns) ? data.spawns : (Array.isArray(data) ? data : []);
-  if(!spawns.length){
-    el.innerHTML = '<p class="empty">spawn file found but no spawn entries parsed out of it — schema may have changed since this was built</p>';
-    return;
-  }
-  el.innerHTML = spawns.map(s=>{
-    const bucket = s.bucket || s.rarity || '?';
-    const level = levelRangeLabel(s.level);
-    const context = s.context || '';
-    const weight = s.weight!==undefined ? s.weight : '';
-    const presets = s.presets ? s.presets.map(cleanTag).join(', ') : '';
-    const condStr = condSummary(s.condition);
-    const anticondStr = condSummary(s.anticondition);
-    return '<div class="encounter-row" style="flex-direction:column; align-items:flex-start; gap:4px; padding:10px 0;">'+
-      '<div style="display:flex; justify-content:space-between; width:100%;">'+
-        '<b style="text-transform:capitalize;">'+bucket+'</b>'+
-        '<span class="encounter-level">Lv. '+level+'</span>'+
-      '</div>'+
-      (context || weight!=='' ? '<div class="encounter-method" style="max-width:none;">'+(context?'context: '+context:'')+(weight!==''?' · weight '+weight:'')+'</div>' : '')+
-      (presets ? '<div class="encounter-method" style="max-width:none;">presets: '+presets+'</div>' : '')+
-      (condStr ? '<div class="encounter-method" style="max-width:none; text-align:left;">'+condStr+'</div>' : '')+
-      (anticondStr ? '<div class="encounter-method" style="max-width:none; text-align:left; color:var(--notvery);">excludes: '+anticondStr+'</div>' : '')+
-    '</div>';
-  }).join('');
-}
-
-async function loadCobblemonSection(speciesUrl, fallbackId, fallbackName){
-  const el = document.getElementById('dexCobblemon');
-  el.innerHTML = '<p class="colhead">Cobblemon (Minecraft mod) — wild spawn data</p><p class="search-msg loading">checking Cobblemon\'s spawn pool…</p>';
-  const ref = speciesRefFromUrl(speciesUrl) || {};
-  const id = ref.id || fallbackId;
-  const name = ref.name || fallbackName;
-  try{
-    const data = await fetchCobblemonSpawn(id, name);
-    el.innerHTML = '<p class="colhead">Cobblemon (Minecraft mod) — wild spawn data</p>'+
-      '<p class="search-hint" style="margin-bottom:12px;">pulled live from Cobblemon\'s default spawn_pool_world files on GitLab — this is the base mod\'s own spawn pool, not any particular server\'s custom datapack, so a server you play on may differ</p>'+
-      '<div id="cobblemonSpawnList"></div>';
-    renderCobblemonSpawns(data, name);
-  } catch(err){
-    el.innerHTML = '<p class="colhead">Cobblemon (Minecraft mod) — wild spawn data</p>'+
-      '<p class="empty">no default Cobblemon spawn file found for this species/form — it may not be implemented in Cobblemon yet, only obtainable via evolution/trade/gift/Poké Loot, or this form uses a different file name than guessed</p>';
-  }
-}
-
 function wireAutocomplete(input, box, onPick){
   let hiIndex = -1;
   let matches = [];
@@ -1159,8 +1062,6 @@ async function lookupPokemon(rawVal){
     fetchEncounters(p.id).then(encData=>{
       renderGamesSection(groupEncountersByVersion(encData));
     });
-
-    loadCobblemonSection(p.speciesUrl, p.id, p.name);
   } catch(err){
     searchMsg.innerHTML = '<p class="search-msg err">no match for "'+raw+'" — check the spelling, or use the dex number instead</p>';
   }
