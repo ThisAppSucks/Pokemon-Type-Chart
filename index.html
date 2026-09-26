@@ -207,6 +207,25 @@
   }
   .evo-arrow span{font-size:9.5px; white-space:nowrap;}
 
+  /* games / encounters */
+  .game-chips{display:flex; flex-wrap:wrap; gap:6px;}
+  .game-chip{
+    font-family:var(--mono); font-size:10.5px; background:var(--panel-2);
+    border:1px solid var(--line); color:var(--text); padding:6px 10px;
+    border-radius:6px; cursor:pointer;
+  }
+  .game-chip:hover{border-color:#565d75;}
+  .game-chip.active{background:#2c3242; border-color:#565d75; font-weight:700;}
+  .encounter-row{
+    display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    font-family:var(--mono); font-size:11.5px; padding:7px 0;
+    border-bottom:1px dashed var(--line);
+  }
+  .encounter-row:last-child{border-bottom:none;}
+  .encounter-area{flex:1; text-transform:capitalize; color:var(--text);}
+  .encounter-level{color:var(--dim); flex:none; font-size:11px;}
+  .encounter-method{color:var(--dim); flex:none; text-align:right; font-size:10.5px; max-width:200px;}
+
   /* type selector grid */
   .selector-label{
     font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
@@ -444,6 +463,7 @@
         <div class="stat-grid" id="dexStats"></div>
         <div class="panel" id="dexMatchups" style="margin-top:16px; margin-bottom:0;"></div>
         <div class="panel" id="dexEvolution" style="margin-top:16px; margin-bottom:0;"></div>
+        <div class="panel" id="dexGames" style="margin-top:16px; margin-bottom:0;"></div>
       </div>
     </div>
     <p class="search-hint" style="margin-bottom:0;">tip: this typing is also loaded into the Type Matchups tab if you want to build on it manually</p>
