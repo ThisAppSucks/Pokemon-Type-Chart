@@ -414,9 +414,10 @@
           </div>
         </div>
         <div class="stat-grid" id="dexStats"></div>
+        <div class="panel" id="dexMatchups" style="margin-top:16px; margin-bottom:0;"></div>
       </div>
     </div>
-    <p class="search-hint" style="margin-bottom:0;">tip: this typing is also loaded straight into the Type Matchups tab</p>
+    <p class="search-hint" style="margin-bottom:0;">tip: this typing is also loaded into the Type Matchups tab if you want to build on it manually</p>
   </div>
 
   <!-- ===== TAB: TYPE MATCHUPS ===== -->
@@ -523,6 +524,31 @@ function mult(atk, def){
 }
 function abbr(t){ return t.slice(0,3).toUpperCase(); }
 function titleCase(t){ return t.charAt(0).toUpperCase()+t.slice(1); }
+
+// combined defensive multiplier across 1 or 2 types, for a given attacking type
+function combinedDefMult(types, atkType){
+  return types.reduce((acc,t)=>acc*mult(atkType,t),1);
+}
+
+// full weak/neutral/resist/immune breakdown for a 1- or 2-type combo
+function buildDefBreakdown(types){
+  const combined = TYPES.map(atk => ({t:atk, v: combinedDefMult(types, atk)}));
+  const w4 = combined.filter(e=>e.v===4);
+  const w2 = combined.filter(e=>e.v===2);
+  const neutral = combined.filter(e=>e.v===1);
+  const rH = combined.filter(e=>e.v===0.5);
+  const rQ = combined.filter(e=>e.v===0.25);
+  const imm = combined.filter(e=>e.v===0);
+  return '<p class="colhead">Defensive profile — '+types.join(' / ')+'</p>'+
+    '<div class="combo-full">'+
+      '<div class="rowset notvery"><div class="label">4× weak <span class="n">— '+w4.length+'</span></div>'+tagRow(w4)+'</div>'+
+      '<div class="rowset notvery"><div class="label">2× weak <span class="n">— '+w2.length+'</span></div>'+tagRow(w2)+'</div>'+
+      '<div class="rowset super"><div class="label">½× resist <span class="n">— '+rH.length+'</span></div>'+tagRow(rH)+'</div>'+
+      '<div class="rowset super"><div class="label">¼× resist <span class="n">— '+rQ.length+'</span></div>'+tagRow(rQ)+'</div>'+
+      '<div class="rowset immune"><div class="label">Immune (0×) <span class="n">— '+imm.length+'</span></div>'+tagRow(imm)+'</div>'+
+      '<div class="rowset"><div class="label">Neutral (1×) <span class="n">— '+neutral.length+'</span></div>'+tagRow(neutral)+'</div>'+
+    '</div>';
+}
 
 // ===================== TABS =====================
 document.querySelectorAll('.tab-btn').forEach(btn=>{
@@ -795,9 +821,13 @@ async function lookupPokemon(rawVal){
         '<div class="stat-val">'+val+'</div></div>';
     }).join('');
     document.getElementById('dexStats').innerHTML = statsHtml;
-    dexCard.classList.add('show');
 
-    if(p.types.length){ selected = p.types.slice(0,2); render(); }
+    if(p.types.length){
+      document.getElementById('dexMatchups').innerHTML = buildDefBreakdown(p.types);
+      selected = p.types.slice(0,2);
+      render();
+    }
+    dexCard.classList.add('show');
   } catch(err){
     searchMsg.innerHTML = '<p class="search-msg err">no match for "'+raw+'" — check the spelling, or use the dex number instead</p>';
   }
