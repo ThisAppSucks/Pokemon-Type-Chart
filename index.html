@@ -351,13 +351,19 @@
     cursor:pointer;
   }
   .slot .remove-x:hover{color:var(--notvery); border-color:var(--notvery);}
-  .avail-tag{
-    font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.03em;
-    padding:2px 7px; border-radius:10px; margin-top:2px;
+
+  /* suggestion card enhancements */
+  .role-badge{
+    font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.05em;
+    padding:2px 8px; border-radius:10px; margin-top:2px; border:1px solid var(--line); background:var(--panel-2); color:var(--dim);
   }
-  .avail-tag.avail-now{background:rgba(79,214,122,.18); color:var(--super); border:1px solid rgba(79,214,122,.4);}
-  .avail-tag.avail-later{background:rgba(224,90,90,.15); color:#f0a3a3; border:1px solid rgba(224,90,90,.4);}
-  .avail-tag.avail-unknown{background:var(--panel-2); color:var(--dim); border:1px solid var(--line);}
+  .role-badge.role-wall{border-color:rgba(79,214,122,.4); color:var(--super);}
+  .role-badge.role-sweeper{border-color:rgba(224,90,90,.4); color:#f0a3a3;}
+  .role-badge.role-support{border-color:rgba(168,182,240,.4); color:#a8b6f0;}
+  .sugg-rationale{font-family:var(--mono); font-size:10px; color:var(--text); margin-top:6px; line-height:1.5; text-align:left;}
+  .sugg-warn{color:var(--notvery);}
+  .sugg-note{font-family:var(--mono); font-size:9.5px; color:var(--dim); font-style:italic; margin-top:4px;}
+  .sugg-score{font-family:var(--mono); font-size:9.5px; color:var(--super); margin-top:4px;}
 
   .team-summary{
     font-family:var(--mono);
@@ -517,13 +523,11 @@
     </div>
 
     <div class="search-panel" id="progressPanel">
-      <p class="selector-label">Game progress (optional) — marks pokémon available / not yet, doesn't block anything</p>
+      <p class="selector-label">Available in game (optional) — filters Suggest Fixes to pokémon confirmed obtainable there</p>
       <div class="search-row">
-        <select id="progressGameSelect"></select>
-        <select id="progressBadgeSelect"></select>
+        <select id="availGameSelect"></select>
       </div>
-      <p class="search-hint">uses each pokémon's lowest wild-encounter level in that game as a progress marker — exact where the game itself gates by level (Sword/Shield), an estimated curve with slack elsewhere, since skips and sequence breaks are assumed possible when data isn't exact</p>
-      <p class="search-hint" id="progressAccuracyNote" style="color:var(--dim); font-style:italic;"></p>
+      <p class="search-hint">checks each candidate's real wild-encounter data for the chosen game — no guessing, no level estimates, just whether it actually appears there</p>
     </div>
 
     <div class="team-slots" id="teamSlots"></div>
@@ -536,10 +540,10 @@
 
     <div class="panel">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
-        <p class="colhead" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">Suggested additions — pokémon that patch your gaps</p>
+        <p class="colhead" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">Suggested additions — ranked by how much each one actually improves your team</p>
         <button id="teamSuggestBtn" style="background:#2c3242; border:1px solid var(--line); color:var(--text); font-family:var(--mono); font-size:11.5px; letter-spacing:.05em; text-transform:uppercase; padding:8px 14px; border-radius:6px; cursor:pointer;">Suggest fixes</button>
       </div>
-      <div id="teamSuggestions"><p class="empty">add pokémon, then hit "suggest fixes" for candidates that resist your overloaded/uncovered types</p></div>
+      <div id="teamSuggestions"><p class="empty">add pokémon, then hit "suggest fixes" for candidates ranked by real improvement to your team</p></div>
     </div>
 
     <div class="panel">
@@ -791,7 +795,8 @@ async function fetchPokemon(raw){
     stats: data.stats,
     height: data.height,
     weight: data.weight,
-    speciesUrl: data.species ? data.species.url : null
+    speciesUrl: data.species ? data.species.url : null,
+    moves: data.moves.map(m=>m.move.name)
   };
 }
 
@@ -1094,75 +1099,56 @@ const teamSuggestBox = document.getElementById('teamSuggestBox');
 const teamSlots = document.getElementById('teamSlots');
 
 let team = [];
-let lastProblems = {overloaded:[], blindSpots:[]};
+let lastProblems = {overloaded:[], blindSpots:[], noOffense:[]};
 
-// ---- game progress (optional availability marker) ----
-let progressGame = '';
-let progressBadges = 0;
-const BADGE_LEVEL_CEILING = [14,20,25,29,33,38,43,50,60]; // rough universal curve, index = badge count 0-8 — used as a fallback where no exact data exists
-const AVAIL_SLACK = 4; // extra levels of leeway for the fallback curve so borderline cases lean "available" (skips/sequence breaks assumed possible)
-
-// exact, reverse-engineered catch-level caps (Dragonflycave, from decompiled game code) — not an approximation.
-// This mechanic is purely badge-count-gated (any Pokémon above this level can't even be thrown a ball at),
-// so there's no route/branching ambiguity here at all for Sword/Shield specifically.
-const EXACT_LEVEL_CAPS = {
-  sword:  [20,25,30,35,40,45,50,55,100],
-  shield: [20,25,30,35,40,45,50,55,100]
-};
-
-const progressGameSelect = document.getElementById('progressGameSelect');
-const progressBadgeSelect = document.getElementById('progressBadgeSelect');
-const progressAccuracyNote = document.getElementById('progressAccuracyNote');
-progressGameSelect.innerHTML = '<option value="">— no game selected —</option>' +
+// ---- real (non-guessed) game-availability filter for suggestions ----
+let availGame = '';
+const availGameSelect = document.getElementById('availGameSelect');
+availGameSelect.innerHTML = '<option value="">— no filter —</option>' +
   GAME_ORDER.map(v=>'<option value="'+v+'">'+titleCaseGame(v)+'</option>').join('');
-progressBadgeSelect.innerHTML = [0,1,2,3,4,5,6,7,8].map(n=>'<option value="'+n+'">'+n+' badge'+(n===1?'':'s')+'</option>').join('');
+availGameSelect.onchange = function(){ availGame = availGameSelect.value; };
 
-function updateProgressAccuracyNote(){
-  if(!progressAccuracyNote) return;
-  if(!progressGame){
-    progressAccuracyNote.textContent = '';
-  } else if(EXACT_LEVEL_CAPS[progressGame]){
-    progressAccuracyNote.textContent = titleCaseGame(progressGame)+' uses an exact, decompiled catch-level cap per badge — this one isn\'t an approximation.';
-  } else {
-    progressAccuracyNote.textContent = 'No exact gating data exists for '+titleCaseGame(progressGame)+' — this uses an estimated level curve with slack built in.';
-  }
-}
-
-progressGameSelect.onchange = function(){ progressGame = progressGameSelect.value; updateProgressAccuracyNote(); renderTeam(); };
-progressBadgeSelect.onchange = function(){ progressBadges = parseInt(progressBadgeSelect.value); renderTeam(); };
-
-// returns {status:'available'|'later'|'unknown', minLevel, neededBadges}
-async function getAvailability(pokemonId, game){
-  if(!game) return null;
+// true if this pokémon has ANY real wild-encounter entry for the given game (no level/badge guessing)
+async function isObtainableInGame(pokemonId, game){
+  if(!game) return true;
   const enc = await fetchEncounters(pokemonId);
   const grouped = groupEncountersByVersion(enc);
-  const areas = grouped[game];
-  if(!areas || !areas.length) return { status:'unknown', minLevel:null, neededBadges:null };
-  const minLevel = Math.min.apply(null, areas.map(a=>a.minLevel));
-
-  const exactCaps = EXACT_LEVEL_CAPS[game];
-  if(exactCaps){
-    const ceiling = exactCaps[Math.min(progressBadges,8)];
-    if(minLevel<=ceiling) return { status:'available', minLevel, neededBadges:null };
-    let needed = exactCaps.findIndex(c=> c >= minLevel);
-    if(needed===-1) needed = 8;
-    return { status:'later', minLevel, neededBadges: needed };
-  }
-
-  const ceiling = BADGE_LEVEL_CEILING[Math.min(progressBadges,8)] + AVAIL_SLACK;
-  if(minLevel<=ceiling){
-    return { status:'available', minLevel, neededBadges:null };
-  }
-  let needed = BADGE_LEVEL_CEILING.findIndex(c=> (c+AVAIL_SLACK) >= minLevel);
-  if(needed===-1) needed = 8;
-  return { status:'later', minLevel, neededBadges: needed };
+  return !!(grouped[game] && grouped[game].length);
 }
 
-function availTagHtml(avail){
-  if(!avail) return '';
-  if(avail.status==='available') return '<span class="avail-tag avail-now">Lv.'+avail.minLevel+' · available now</span>';
-  if(avail.status==='later') return '<span class="avail-tag avail-later">Lv.'+avail.minLevel+' · ~badge '+avail.neededBadges+'+</span>';
-  return '<span class="avail-tag avail-unknown">not confirmed here</span>';
+// cache of type -> Set(move names) for that type, used for offensive-coverage checks
+const typeMoveSetCache = {};
+async function fetchTypeMoveSet(type){
+  const key = type.toLowerCase();
+  if(typeMoveSetCache[key]) return typeMoveSetCache[key];
+  try{
+    const res = await fetch('https://pokeapi.co/api/v2/type/'+key);
+    if(!res.ok){ typeMoveSetCache[key] = new Set(); return typeMoveSetCache[key]; }
+    const data = await res.json();
+    typeMoveSetCache[key] = new Set(data.moves.map(m=>m.name));
+  }catch(e){ typeMoveSetCache[key] = new Set(); }
+  return typeMoveSetCache[key];
+}
+
+// shared metrics engine — used by both renderTeam() and the Suggest Fixes ranker, so the two never drift apart
+function computeTeamMetrics(members){
+  const weakCount = {}, resistCount = {}, immuneCount = {}, offenseCount = {};
+  TYPES.forEach(t=>{ weakCount[t]=0; resistCount[t]=0; immuneCount[t]=0; offenseCount[t]=0; });
+  members.forEach(m=>{
+    TYPES.forEach(atk=>{
+      const v = m.types.reduce((acc,t)=>acc*mult(atk,t),1);
+      if(v>=2) weakCount[atk]++;
+      else if(v>0 && v<1) resistCount[atk]++;
+      else if(v===0) immuneCount[atk]++;
+    });
+    m.types.forEach(ownType=>{
+      TYPES.forEach(d=>{ if(mult(ownType,d)===2) offenseCount[d]++; });
+    });
+  });
+  const overloaded = TYPES.filter(t=>weakCount[t]>=3);
+  const blindSpots = TYPES.filter(t=>resistCount[t]===0 && immuneCount[t]===0 && weakCount[t]>0);
+  const noOffense = TYPES.filter(t=>offenseCount[t]===0);
+  return { weakCount, resistCount, immuneCount, offenseCount, overloaded, blindSpots, noOffense };
 }
 
 async function addToTeam(rawVal){
@@ -1209,20 +1195,10 @@ function renderTeam(){
           '<img src="'+m.sprite+'" alt="">'+
           '<div class="slot-name">'+m.name.replace(/-/g,' ')+'</div>'+
           '<div class="slot-types">'+m.types.map(t=>'<span class="type-pill" style="background:'+COLORS[t]+'">'+t+'</span>').join('')+'</div>'+
-          '<div class="avail-slot"></div>'+
         '</div>');
     }
   }
   teamSlots.innerHTML = slotsHtml.join('');
-
-  if(progressGame){
-    team.forEach(function(m){
-      getAvailability(m.id, progressGame).then(function(avail){
-        const slotEl = teamSlots.querySelector('.slot[data-member-id="'+m.id+'"] .avail-slot');
-        if(slotEl) slotEl.innerHTML = availTagHtml(avail);
-      });
-    });
-  }
 
   const summaryEl = document.getElementById('teamSummary');
   const pairWarnEl = document.getElementById('teamPairWarnings');
@@ -1236,32 +1212,17 @@ function renderTeam(){
     heatWeakEl.innerHTML = '<p class="empty">—</p>';
     heatResistEl.innerHTML = '<p class="empty">—</p>';
     offenseEl.innerHTML = '<p class="empty">—</p>';
-    lastProblems = {overloaded:[], blindSpots:[]};
-    document.getElementById('teamSuggestions').innerHTML = '<p class="empty">add pokémon, then hit "suggest fixes" for candidates that resist your overloaded/uncovered types</p>';
+    lastProblems = {overloaded:[], blindSpots:[], noOffense:[]};
+    document.getElementById('teamSuggestions').innerHTML = '<p class="empty">add pokémon, then hit "suggest fixes" for candidates ranked by real improvement to your team</p>';
     return;
   }
 
-  const weakCount = {}, resistCount = {}, immuneCount = {}, offenseCount = {};
-  TYPES.forEach(t=>{ weakCount[t]=0; resistCount[t]=0; immuneCount[t]=0; offenseCount[t]=0; });
-
-  team.forEach(m=>{
-    TYPES.forEach(atk=>{
-      const v = memberDefMult(m, atk);
-      if(v>=2) weakCount[atk]++;
-      else if(v>0 && v<1) resistCount[atk]++;
-      else if(v===0) immuneCount[atk]++;
-    });
-    m.types.forEach(ownType=>{
-      TYPES.forEach(d=>{
-        if(mult(ownType,d)===2) offenseCount[d]++;
-      });
-    });
-  });
-
-  const overloaded = TYPES.filter(t=>weakCount[t]>=3).sort((a,b)=>weakCount[b]-weakCount[a]);
-  const blindSpots = TYPES.filter(t=>resistCount[t]===0 && immuneCount[t]===0 && weakCount[t]>0);
-  const noOffense = TYPES.filter(t=>offenseCount[t]===0);
-  lastProblems = {overloaded, blindSpots};
+  const metrics = computeTeamMetrics(team);
+  const { weakCount, resistCount, immuneCount, offenseCount } = metrics;
+  const overloaded = metrics.overloaded.slice().sort((a,b)=>weakCount[b]-weakCount[a]);
+  const blindSpots = metrics.blindSpots;
+  const noOffense = metrics.noOffense;
+  lastProblems = { overloaded, blindSpots, noOffense };
 
   const pairs = [];
   for(let i=0;i<team.length;i++){
@@ -1325,21 +1286,72 @@ function shuffleArr(arr){
   return a;
 }
 
-async function fetchSpeciesFlags(speciesUrl){
+async function fetchSpeciesInfo(speciesUrl){
   try{
     const res = await fetch(speciesUrl);
-    if(!res.ok) return {legendary:false, mythical:false};
+    if(!res.ok) return {legendary:false, mythical:false, isBaby:false, evolutionChainUrl:null};
     const d = await res.json();
-    return {legendary: !!d.is_legendary, mythical: !!d.is_mythical};
-  }catch(e){ return {legendary:false, mythical:false}; }
+    return {
+      legendary: !!d.is_legendary,
+      mythical: !!d.is_mythical,
+      isBaby: !!d.is_baby,
+      evolutionChainUrl: d.evolution_chain ? d.evolution_chain.url : null
+    };
+  }catch(e){ return {legendary:false, mythical:false, isBaby:false, evolutionChainUrl:null}; }
 }
 
-// ---- suggested additions: pokémon that resist/block the team's problem types ----
+// only called on the small final shortlist — walks the evolution chain to see if this species can still evolve further
+async function isFullyEvolved(evolutionChainUrl, pokemonId){
+  if(!evolutionChainUrl) return true;
+  try{
+    const res = await fetch(evolutionChainUrl);
+    if(!res.ok) return true;
+    const data = await res.json();
+    function findNode(node){
+      if(idFromUrl(node.species.url)===pokemonId) return node;
+      for(const child of node.evolves_to){ const r=findNode(child); if(r) return r; }
+      return null;
+    }
+    const node = findNode(data.chain);
+    return node ? node.evolves_to.length===0 : true;
+  }catch(e){ return true; }
+}
+
+function statMapOf(candidate){
+  const m = {};
+  candidate.stats.forEach(s=>{ m[s.stat.name] = s.base_stat; });
+  return m;
+}
+
+// heuristic role tag from base stats — Wall (bulk-heavy), Sweeper (power+speed heavy), or Support (balanced/utility)
+function roleTagOf(candidate){
+  const s = statMapOf(candidate);
+  const hp=s.hp||0, atk=s.attack||0, def=s.defense||0, spa=s['special-attack']||0, spd=s['special-defense']||0, spe=s.speed||0;
+  const total = hp+atk+def+spa+spd+spe || 1;
+  const bulk = hp+def+spd;
+  const power = atk+spa;
+  if(bulk/total >= 0.46) return 'Wall';
+  if((power+spe)/total >= 0.58) return 'Sweeper';
+  return 'Support';
+}
+
+// ---- suggested additions: net-improvement ranking, redundancy checks, rationale, roles, coverage ----
 function scoreDefTypes(problemTypes){
   return TYPES.map(defType=>{
     const covers = problemTypes.filter(atk => mult(atk, defType) <= 0.5);
     return { type: defType, covers };
   }).filter(s=>s.covers.length>0).sort((a,b)=> b.covers.length - a.covers.length);
+}
+
+// weighted "how bad is this team's type coverage" score — lower is better
+function badnessOf(metrics){
+  let score = 0;
+  TYPES.forEach(t=>{
+    if(metrics.weakCount[t]>=3) score += (metrics.weakCount[t]-2)*2;
+    if(metrics.resistCount[t]===0 && metrics.immuneCount[t]===0 && metrics.weakCount[t]>0) score += 4;
+  });
+  score += metrics.noOffense.length;
+  return score;
 }
 
 async function suggestFixes(){
@@ -1358,17 +1370,20 @@ async function suggestFixes(){
   out.innerHTML = '<p class="search-msg loading">looking for pokémon that patch these gaps…</p>';
 
   try{
+    const baseline = computeTeamMetrics(team);
+    const teamTypeCombos = new Set(team.map(m=>m.types.slice().sort().join(',')));
     const ranked = scoreDefTypes(problemTypes).slice(0,4);
     const teamIds = new Set(team.map(m=>m.id));
+    const gameFilter = availGame;
 
-    // fetch every candidate type's full member list IN PARALLEL (was one type at a time before),
-    // then take a random sample of 12 per type instead of always the same low-dex-number entries.
+    // fetch every candidate type's full member list IN PARALLEL, sample randomly, then filter by real
+    // game-encounter data (if a game filter is set) BEFORE spending fetchPokemon calls on the rest.
     const typeLists = await Promise.all(ranked.map(async r=>{
       try{
         const res = await fetch('https://pokeapi.co/api/v2/type/'+r.type.toLowerCase());
         if(!res.ok) return { type:r.type, covers:r.covers, names:[] };
         const data = await res.json();
-        const names = data.pokemon
+        let names = data.pokemon
           .map(p=>p.pokemon)
           .filter(p=>!p.name.includes('-'))
           .map(p=>{
@@ -1376,62 +1391,90 @@ async function suggestFixes(){
             return { name:p.name, id: m ? parseInt(m[1]) : null };
           })
           .filter(p=>p.id && !teamIds.has(p.id));
-        return { type:r.type, covers:r.covers, names: shuffleArr(names).slice(0,12) };
+        names = shuffleArr(names).slice(0,14);
+        if(gameFilter){
+          const checks = await Promise.all(names.map(async n=>({ n, ok: await isObtainableInGame(n.id, gameFilter) })));
+          names = checks.filter(c=>c.ok).map(c=>c.n);
+        }
+        return { type:r.type, covers:r.covers, names: names.slice(0,10) };
       }catch(e){ return { type:r.type, covers:r.covers, names:[] }; }
     }));
 
+    // build a candidate pool (fetch full data + species info in parallel), filtering legendaries/mythicals and exact-typing duplicates
     const seen = new Set();
-    const suggestions = [];
-
+    let pool = [];
     for(const tl of typeLists){
-      if(suggestions.length>=8) break;
       const candidates = tl.names.filter(c=>!seen.has(c.id));
-      // evaluate this type's sampled candidates IN PARALLEL (was one fetchPokemon call at a time before),
-      // and drop legendaries/mythicals since they're rarely a practical "add this to your team" suggestion.
       const evaluated = await Promise.all(candidates.map(async c=>{
         try{
           const p = await fetchPokemon(c.name);
-          const flags = await fetchSpeciesFlags(p.speciesUrl);
-          if(flags.legendary || flags.mythical) return null;
-          return p;
+          const info = await fetchSpeciesInfo(p.speciesUrl);
+          if(info.legendary || info.mythical) return null;
+          const combo = p.types.slice().sort().join(',');
+          if(teamTypeCombos.has(combo)) return null; // redundant — a team member already has this exact typing
+          return Object.assign({}, p, { coversFor: tl.covers, speciesInfo: info });
         }catch(e){ return null; }
       }));
-      let picked = 0;
       for(const p of evaluated){
-        if(!p || picked>=3 || suggestions.length>=8) continue;
-        if(seen.has(p.id)) continue;
+        if(!p || seen.has(p.id)) continue;
         seen.add(p.id);
-        suggestions.push(Object.assign({}, p, {coversFor: tl.covers}));
-        picked++;
+        pool.push(p);
       }
     }
 
-    if(!suggestions.length){
-      out.innerHTML = '<p class="empty">couldn\'t find good non-legendary candidates right now — click "suggest fixes" again for a fresh random sample, or the gap may need a specific counter rather than a type match</p>';
+    if(!pool.length){
+      out.innerHTML = '<p class="empty">couldn\'t find good candidates right now — click "suggest fixes" again for a fresh sample'+(gameFilter?', or try without the game filter':'')+'</p>';
       return;
     }
 
-    // if a progress game is set, check availability for each suggestion and sort available-now first
-    let withAvail = suggestions.map(s=>({ s, avail:null }));
-    if(progressGame){
-      withAvail = await Promise.all(suggestions.map(async s=>{
-        const avail = await getAvailability(s.id, progressGame);
-        return { s, avail };
-      }));
-      withAvail.sort((a,b)=>{
-        const rank = x => x.avail && x.avail.status==='available' ? 0 : (x.avail && x.avail.status==='later' ? 2 : 1);
-        return rank(a)-rank(b);
-      });
-    }
+    // net-improvement ranking: simulate adding each candidate and see how much it actually helps
+    const scored = pool.map(p=>{
+      const hypothetical = computeTeamMetrics(team.concat([p]));
+      const improvement = badnessOf(baseline) - badnessOf(hypothetical);
+      const newOverloaded = hypothetical.overloaded.filter(t=>!baseline.overloaded.includes(t));
+      const newBlindSpots = hypothetical.blindSpots.filter(t=>!baseline.blindSpots.includes(t));
+      const closesOffense = baseline.noOffense.filter(t=>!hypothetical.noOffense.includes(t));
+      return { p, improvement, newOverloaded, newBlindSpots, closesOffense };
+    }).sort((a,b)=> b.improvement - a.improvement);
 
-    out.innerHTML = '<div class="team-slots">' + withAvail.map(function(entry){
-      const s = entry.s, avail = entry.avail;
+    const shortlist = scored.slice(0,8);
+
+    // move-based offensive coverage: does this candidate know a move of a type the team currently can't hit super effectively?
+    const remainingGapTypes = baseline.noOffense;
+    const gapMoveSets = {};
+    await Promise.all(remainingGapTypes.map(async t=>{ gapMoveSets[t] = await fetchTypeMoveSet(t); }));
+
+    // evolution-stage note — only fetched for the final shortlist to keep this cheap
+    await Promise.all(shortlist.map(async entry=>{
+      entry.fullyEvolved = await isFullyEvolved(entry.p.speciesInfo.evolutionChainUrl, entry.p.id);
+    }));
+
+    out.innerHTML = '<div class="team-slots">' + shortlist.map(function(entry){
+      const s = entry.p;
+      const role = roleTagOf(s);
+      const roleClass = role==='Wall' ? 'role-wall' : role==='Sweeper' ? 'role-sweeper' : 'role-support';
+
+      const moveGaps = remainingGapTypes.filter(t => Array.from(gapMoveSets[t]||[]).some(mv => s.moves.includes(mv)));
+
+      let rationale = 'Resists/blocks: '+s.coversFor.join(', ')+'.';
+      if(entry.closesOffense.length) rationale += ' Also adds STAB coverage vs '+entry.closesOffense.join(', ')+'.';
+      if(moveGaps.length) rationale += ' Can learn a move to hit '+moveGaps.join(', ')+'-weak types.';
+      let warnHtml = '';
+      if(entry.newOverloaded.length || entry.newBlindSpots.length){
+        const risks = entry.newOverloaded.concat(entry.newBlindSpots);
+        warnHtml = '<div class="sugg-rationale sugg-warn">Introduces a new risk to: '+risks.join(', ')+'</div>';
+      }
+      const evoNote = entry.fullyEvolved ? '' : '<div class="sugg-note">not fully evolved — typing may change on evolution</div>';
+
       return '<div class="slot" style="min-height:auto; padding:10px;">'+
           '<img src="'+s.sprite+'" alt="" style="width:48px;height:48px;">'+
           '<div class="slot-name">'+s.name.replace(/-/g,' ')+'</div>'+
           '<div class="slot-types">'+s.types.map(t=>'<span class="type-pill" style="background:'+COLORS[t]+'">'+t+'</span>').join('')+'</div>'+
-          '<div style="font-family:var(--mono); font-size:9.5px; color:var(--dim); margin-top:2px;">covers: '+s.coversFor.join(', ')+'</div>'+
-          (avail ? availTagHtml(avail) : '')+
+          '<span class="role-badge '+roleClass+'">'+role+'</span>'+
+          '<div class="sugg-rationale">'+rationale+'</div>'+
+          warnHtml+
+          evoNote+
+          '<div class="sugg-score">net improvement: '+(entry.improvement>0?'+':'')+entry.improvement+'</div>'+
           '<button class="tab-btn" style="border:1px solid var(--line); border-radius:5px; margin-top:6px; padding:4px 10px; font-size:10.5px;" onclick="quickAddSuggestion(\''+s.name+'\')">+ add to team</button>'+
         '</div>';
     }).join('') + '</div>';
