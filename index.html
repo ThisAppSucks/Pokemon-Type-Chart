@@ -116,6 +116,28 @@
     outline:none;
   }
   .search-row input:focus{border-color:#565d75;}
+  .search-row select{
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    color:var(--text);
+    font-family:var(--mono);
+    font-size:13px;
+    padding:10px 34px 10px 12px;
+    border-radius:6px;
+    outline:none;
+    cursor:pointer;
+    appearance:none;
+    -webkit-appearance:none;
+    -moz-appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0L5 6L10 0Z' fill='%238890a4'/></svg>");
+    background-repeat:no-repeat;
+    background-position:right 12px center;
+  }
+  .search-row select:focus{border-color:#565d75;}
+  .search-row select option{
+    background:var(--panel-2);
+    color:var(--text);
+  }
   .search-row button{
     background:#2c3242;
     border:1px solid var(--line);
